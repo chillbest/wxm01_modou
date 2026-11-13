@@ -1,0 +1,41 @@
+# Local environment and secrets (keep shareable examples)
+.venv/
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Temporary files, backups, and logs
+/.tmp/
+/.backup/
+/logs/
+*.log
+
+# Python bytecode, caches, build and test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+/build/
+/dist/
+*.egg-info/
+
+# Local datasets and sample posts
+/data/bangumi/
+/data/samplepost/
+
+# Office lock files and generated inspection output
+~$*
+*.inspect.ndjson
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Generated outputs (approved import records live in docs/imports/)
+/outputs/
