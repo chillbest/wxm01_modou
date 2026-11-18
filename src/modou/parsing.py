@@ -1,4 +1,5 @@
 """M02: deterministic extraction; uncertain facts remain review issues."""
+from .logging_setup import note_total, event, context, stage, summary, failure_reason
 import re
 from datetime import date
 from decimal import Decimal
@@ -12,9 +13,8 @@ class CatalogEntry(BaseModel):
     name_zh: str = Field(min_length=1)
     name_en: str | None = None
     aliases: list[str] = Field(default_factory=list)
-    name_id: int | None = None
-    variant_id: int | None = None
-    platform: Literal["PS5", "PS4"] | None = None
+    gpc_id: int | None = None
+    platform: str | None = None
     edition: str | None = None
 
 
@@ -30,13 +30,12 @@ class ReviewItem(BaseModel):
     section: str
     raw_name: str
     normalized_name: str = ""
-    name_id: int | None = None
-    variant_id: int | None = None
+    gpc_id: int | None = None
     match_status: Literal["unmatched", "alias", "ambiguous", "conflict"] = "unmatched"
     review_status: Literal["pending"] = "pending"
     name_zh: str | None = None
     name_en: str | None = None
-    platform: Literal["PS5", "PS4"] | None = None
+    platform: str | None = None
     edition: str | None = None
     region: str | None = None
     lowprice_cny: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=2)
@@ -85,32 +84,28 @@ def match_alias(item, base_name, catalog):
     if not matches:
         item.issues.append("游戏名称未匹配")
         return
-    compatible = [entry for entry in matches if not (
-        (item.platform and entry.platform and item.platform != entry.platform) or
-        (item.edition and entry.edition and item.edition.casefold() != entry.edition.casefold()))]
-    if not compatible:
-        item.match_status = "conflict"
-        item.issues.append("原文规格与别名记忆冲突")
-        return
-    # Multiple aliases pointing to the same target are one identification.
-    targets = {(entry.name_id, entry.name_zh, entry.variant_id, entry.platform, entry.edition): entry
-               for entry in compatible}
+    targets = {(entry.gpc_id, entry.name_zh): entry for entry in matches}
     if len(targets) != 1:
         item.match_status = "ambiguous"
         item.issues.append("游戏名称匹配歧义")
         return
     entry = next(iter(targets.values()))
     item.match_status = "alias"
-    item.name_id, item.name_zh, item.name_en = entry.name_id, entry.name_zh, entry.name_en
-    if entry.variant_id is not None:
-        item.variant_id = entry.variant_id
-        item.platform, item.edition = entry.platform, entry.edition
+    item.gpc_id, item.name_zh, item.name_en = entry.gpc_id, entry.name_zh, entry.name_en
 
 
 def parse_note(text: str, *, published_date: date | None = None,
                source_url: str | None = None, catalog: list[CatalogEntry] = (),
-               suggest=None) -> ParsedNote:
+               suggest=None, log_results=True, note_id="-") -> ParsedNote:
     lines = text.splitlines()
+    count, count_section = 0, ''
+    for number, raw in enumerate(lines, 1):
+        line = raw.strip()
+        if '——' in line:
+            count_section = line
+        elif '数字折扣' not in count_section and '｜' in line and number != 1:
+            count += 1
+    note_total(count)
     items, skipped, errors = [], [], []
     section = ""
     for number, raw in enumerate(lines, 1):
@@ -125,12 +120,14 @@ def parse_note(text: str, *, published_date: date | None = None,
         if "｜" not in line or number == 1:
             if line.startswith(("🔸", "🔹")):
                 errors.append(f"第{number}行：报价格式无法识别")
+                if log_results:
+                    event("报价行无法解析", note_id=str(note_id), line=number, reason="缺少报价分隔符")
             continue
         parts = line.split("｜")
         name = parts[0].lstrip("🔸🔹▪️ ").strip()
         item = ReviewItem(line_number=number, raw_line=raw, section=section,
                           raw_name=name, normalized_name=normalize_name(name),
-                          lowprice_date=published_date, lowprice_method="")
+                          lowprice_date=published_date, lowprice_method="直接购买", platform="PS5")
         name = item.normalized_name
         platform = re.search(r"(?<![A-Za-z0-9])(PS5|PS4)(?![A-Za-z0-9])", name, re.I)
         if platform:
@@ -140,13 +137,17 @@ def parse_note(text: str, *, published_date: date | None = None,
         if edition:
             item.edition = edition[1].lower() if edition[1].lower() == "+dlc" else edition[1]
             name = name[:edition.start()].strip()
-        match_alias(item, name, catalog)
+        # Do not discard content edition when identifying a GPC.
+        match_alias(item, re.sub(r"\s*(?<![A-Za-z0-9])(PS5|PS4)(?![A-Za-z0-9])\s*", "", item.normalized_name).strip(), catalog)
         if item.match_status != "alias":
             if suggest:
                 try:
                     item.ai_suggestion = Suggestion.model_validate(suggest(item.normalized_name))
                     item.issues.append("AI建议待人工确认")
-                except Exception:
+                except Exception as exc:
+                    if log_results:
+                        with context(note_id=str(note_id), line=number, raw_name=item.raw_name):
+                            event("AI辅助失败原因", reason=failure_reason(exc))
                     item.issues.append("AI辅助失败")
         price_text = parts[1].strip()
         for flag, region in REGIONS.items():
@@ -191,6 +192,15 @@ def parse_note(text: str, *, published_date: date | None = None,
                              (item.lowprice_method, "优惠方式")]:
             if field is None:
                 item.issues.append(f"{label}待确认")
+        if log_results:
+            with context(note_id=str(note_id), line=number, raw_name=item.raw_name):
+                stage('本地别名', [{'name_zh': item.name_zh, 'gpc_id': item.gpc_id}] if item.match_status == 'alias' else (), result={'alias': '命中', 'ambiguous': '歧义', 'unmatched': '未命中', 'conflict': '冲突'}[item.match_status],
+                      reason='唯一别名命中' if item.match_status == 'alias' else '多个别名目标' if item.match_status == 'ambiguous' else '无匹配别名')
+                for unused in ('Bangumi本地资料', 'BangumiAPI'):
+                    stage(unused, result='未执行', reason='该入口不使用Bangumi')
+                stage('DeepSeek', [{'name_zh': item.ai_suggestion.name_zh}] if item.ai_suggestion and item.ai_suggestion.name_zh else (), result='AI建议' if item.ai_suggestion and item.ai_suggestion.name_zh else '调用失败' if 'AI辅助失败' in item.issues else '未命中' if suggest and item.match_status != 'alias' else '未执行',
+                      reason='建议待人工确认' if item.ai_suggestion and item.ai_suggestion.name_zh else 'AI辅助失败' if 'AI辅助失败' in item.issues else 'AI未给出名称' if suggest and item.match_status != 'alias' else '别名已命中或未启用AI')
+                event('条目最终结果', result='已识别' if item.match_status == 'alias' or item.ai_suggestion and item.ai_suggestion.name_zh else '歧义' if item.match_status == 'ambiguous' else '未识别', reason='；'.join(item.issues), review_status='pending')
         items.append(item)
     if not source_url:
         errors.append("来源链接待补")
@@ -200,6 +210,9 @@ def parse_note(text: str, *, published_date: date | None = None,
         errors.append("发布日期待确认")
     if not items:
         errors.append("未识别到实体光盘报价")
+    if log_results:
+        with context(note_id=str(note_id)):
+            summary(["已识别" if i.match_status == "alias" or i.ai_suggestion and i.ai_suggestion.name_zh else "歧义" if i.match_status == "ambiguous" else "未识别" for i in items])
     return ParsedNote(title=lines[0] if lines else "", source_text=text, published_date=published_date,
                       source_url=source_url, items=items, validation_errors=errors,
                       skipped_lines=skipped)

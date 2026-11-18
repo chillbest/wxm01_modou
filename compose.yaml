@@ -1,0 +1,15 @@
+services:
+  web:
+    build: .
+    ports:
+      - "4001:4001"
+    env_file: .env
+    environment:
+      MODOU_WEB_DATA: /app/data/web
+      MODOU_BANGUMI_DUMP: /app/data/bangumi_locale
+    volumes:
+      - ./data/web:/app/data/web
+      - ./data/bangumi_locale:/app/data/bangumi_locale:ro
+      - ./logs:/app/logs
+      - ./config.toml:/app/config.toml:ro
+    restart: unless-stopped

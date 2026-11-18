@@ -1,0 +1,8 @@
+[deepseek]
+# 输出token上限，包含推理和最终答案；修改后下次创建客户端生效。
+max_output_tokens = 3000
+
+[bangumi]
+# 仅程序的Bangumi API请求走此HTTP代理；其他HTTP请求直连，不继承系统/环境代理。
+# 不可用时报错，不回退直连；下次未缓存的Bangumi请求读取。封面图片由浏览器加载。
+proxy_url = "http://127.0.0.1:7897"

@@ -25,8 +25,12 @@ htmlcov/
 *.egg-info/
 
 # Local datasets and sample posts
-/data/bangumi/
+/data/bangumi_locale/
 /data/samplepost/
+/data/Video-Game-Consoles-Exclusive-Game-Lists-main/
+
+# Local web uploads, review drafts, and import receipts
+/data/web/
 
 # Office lock files and generated inspection output
 ~$*

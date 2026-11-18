@@ -1,7 +1,9 @@
 """Optional semantic suggestions. Never owns price/date/platform fields."""
+from .logging_setup import logged_request, event, failure_reason
 import json
 import os
-from urllib.request import Request, urlopen
+from urllib.request import Request
+from .http_transport import direct_urlopen as urlopen
 
 from .parsing import Suggestion
 from .parsing import normalize_name
@@ -42,6 +44,7 @@ class DeepSeek:
         if not self.api_key:
             raise ValueError("缺少DEEPSEEK_API_KEY")
 
+    @logged_request("DeepSeek")
     def __call__(self, name):
         payload = {"model": self.model, "response_format": {"type": "json_object"},
                    "max_tokens": 512, "messages": [
@@ -57,5 +60,6 @@ class DeepSeek:
             if choice["finish_reason"] != "stop":
                 raise ValueError("incomplete response")
             return Suggestion.model_validate_json(choice["message"]["content"])
-        except Exception:
+        except Exception as exc:
+            event("DeepSeek原始失败类别", reason=failure_reason(exc))
             raise RuntimeError("DeepSeek请求失败或返回格式无效") from None
